@@ -9,7 +9,7 @@ export class NotificacionesService {
    * Add service methods here
    */
 
-  enviarCorreoElectronico(datos: any, url: string) {
+  enviarNotificacion(datos: any, url: string) {
     fetch(url, {
       method: 'post',
       body: JSON.stringify(datos),

@@ -23,7 +23,7 @@ import {
 import {UserProfile} from '@loopback/security';
 import {ConfiguracionNotificaciones} from '../config/notificaciones.config';
 import {ConfiguracionSeguridad} from '../config/seguridad.config';
-import {Credenciales, FactorDeAutenticacionPorCodigo, Login, PermisosRolMenu, Usuario} from '../models';
+import {Credenciales, CredencialesRecuperarClave, FactorDeAutenticacionPorCodigo, Login, PermisosRolMenu, Usuario} from '../models';
 import {LoginRepository, UsuarioRepository} from '../repositories';
 import {AuthService, NotificacionesService, SeguridadUsuarioService} from '../services';
 
@@ -41,6 +41,10 @@ export class UsuarioController {
     public servicioNotificaciones: NotificacionesService
   ) { }
 
+  @authenticate({
+    strategy: "auth",
+    options: ["Usuario", "guardar"]
+  })
   @post('/usuario')
   @response(200, {
     description: 'Usuario model instance',
@@ -66,6 +70,50 @@ export class UsuarioController {
     let claveCifrada = this.servicioSeguridad.cifrarTexto(clave);
     // Asignar la clave cifrada al usuario
     usuario.clave = claveCifrada;
+    // Enviar correo electrónico de notificación
+    return this.usuarioRepository.create(usuario);
+  }
+
+  @post('/usuario-publico')
+  @response(200, {
+    description: 'Usuario model instance',
+    content: {'application/json': {schema: getModelSchemaRef(Usuario)}},
+  })
+  async creacionPublica(
+    @requestBody({
+      content: {
+        'application/json': {
+          schema: getModelSchemaRef(Usuario, {
+            title: 'NewUsuario',
+            exclude: ['_id'],
+          }),
+        },
+      },
+    })
+    usuario: Omit<Usuario, '_id'>,
+  ): Promise<Usuario> {
+    // Crear la clave
+    let clave = this.servicioSeguridad.crearTextoAleatorio(10);
+    console.log(clave);
+    // Cifrar la clave
+    let claveCifrada = this.servicioSeguridad.cifrarTexto(clave);
+    // Asignar la clave cifrada al usuario
+    usuario.clave = claveCifrada;
+    // hash de validación de correo
+    let hash = this.servicioSeguridad.crearTextoAleatorio(100);
+    usuario.hashValidacion = hash;
+    usuario.estadoValidacion = false;
+    usuario.aceptado = false;
+    // Notificar del hash
+    let enlace = `<a href="${ConfiguracionNotificaciones.urlValidacionCorreoFrontend}/${hash}" target='_blank'>Validar</a>`;
+    let datos = {
+      correoDestino: usuario.correo,
+      nombreDestino: usuario.primerNombre + " " + usuario.segundoNombre,
+      contenidoCorreo: `Por favor visite este link para validar su correo: ${enlace}`,
+      asuntoCorreo: ConfiguracionNotificaciones.asuntoVerificacionCorreo,
+    };
+    let url = ConfiguracionNotificaciones.urlNotificaciones2fa;
+    this.servicioNotificaciones.enviarNotificacion(datos, url);
     // Enviar correo electrónico de notificación
     return this.usuarioRepository.create(usuario);
   }
@@ -216,11 +264,52 @@ export class UsuarioController {
         asuntoCorreo: ConfiguracionNotificaciones.asunto2fa,
       };
       let url = ConfiguracionNotificaciones.urlNotificaciones2fa;
-      this.servicioNotificaciones.enviarCorreoElectronico(datos, url);
+      this.servicioNotificaciones.enviarNotificacion(datos, url);
       return usuario;
     }
     return new HttpErrors[401]("Credenciales incorrectas.");
   }
+
+  @post('/recuperar-clave')
+  @response(200, {
+    description: "Identificar un usuario por correo y clave",
+    content: {'application/json': {schema: getModelSchemaRef(Usuario)}}
+  })
+  async recuperarClaveUsuario(
+    @requestBody(
+      {
+        content: {
+          'application/json': {
+            schema: getModelSchemaRef(CredencialesRecuperarClave)
+          }
+        }
+      }
+    )
+    credenciales: CredencialesRecuperarClave
+  ): Promise<object> {
+    let usuario = await this.usuarioRepository.findOne({
+      where: {
+        correo: credenciales.correo
+      }
+    });
+    if (usuario) {
+      let nuevaClave = this.servicioSeguridad.crearTextoAleatorio(5);
+      console.log(nuevaClave);
+      let claveCifrada = this.servicioSeguridad.cifrarTexto(nuevaClave);
+      usuario.clave = claveCifrada;
+      this.usuarioRepository.updateById(usuario._id, usuario);
+      // Notificar al usuario vía SMS
+      let datos = {
+        numeroDestino: usuario.celular,
+        contenidoMensaje: `Hola ${usuario.primerNombre}, su nueva clave es: ${nuevaClave}`,
+      };
+      let url = ConfiguracionNotificaciones.urlNotificacionesSms;
+      this.servicioNotificaciones.enviarNotificacion(datos, url);
+      return usuario;
+    }
+    return new HttpErrors[401]("Credenciales incorrectas.");
+  }
+
   @post('/validar-permisos')
   @response(200, {
     description: "Validación de permisos de usuario para lógica de negocio",
