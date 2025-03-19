@@ -23,7 +23,7 @@ import {
 import {UserProfile} from '@loopback/security';
 import {ConfiguracionNotificaciones} from '../config/notificaciones.config';
 import {ConfiguracionSeguridad} from '../config/seguridad.config';
-import {Credenciales, CredencialesRecuperarClave, FactorDeAutenticacionPorCodigo, Login, PermisosRolMenu, Usuario} from '../models';
+import {Credenciales, CredencialesRecuperarClave, FactorDeAutenticacionPorCodigo, HashValidacionUsuario, Login, PermisosRolMenu, Usuario} from '../models';
 import {LoginRepository, UsuarioRepository} from '../repositories';
 import {AuthService, NotificacionesService, SeguridadUsuarioService} from '../services';
 
@@ -70,6 +70,7 @@ export class UsuarioController {
     let claveCifrada = this.servicioSeguridad.cifrarTexto(clave);
     // Asignar la clave cifrada al usuario
     usuario.clave = claveCifrada;
+    usuario.estadoValidacion = true;
     // Enviar correo electrónico de notificación
     return this.usuarioRepository.create(usuario);
   }
@@ -104,7 +105,7 @@ export class UsuarioController {
     usuario.hashValidacion = hash;
     usuario.estadoValidacion = false;
     usuario.aceptado = false;
-    // Notificar del hash
+    // Notificación del hash
     let enlace = `<a href="${ConfiguracionNotificaciones.urlValidacionCorreoFrontend}/${hash}" target='_blank'>Validar</a>`;
     let datos = {
       correoDestino: usuario.correo,
@@ -114,8 +115,45 @@ export class UsuarioController {
     };
     let url = ConfiguracionNotificaciones.urlNotificaciones2fa;
     this.servicioNotificaciones.enviarNotificacion(datos, url);
+
+    // Envío de clave
+    let datosCorreo = {
+      correoDestino: usuario.correo,
+      nombreDestino: usuario.primerNombre + " " + usuario.segundoNombre,
+      contenidoCorreo: `Su clave asignada es: ${clave}`,
+      asuntoCorreo: ConfiguracionNotificaciones.claveAsignada,
+    };
+    this.servicioNotificaciones.enviarNotificacion(datosCorreo, url);
     // Enviar correo electrónico de notificación
     return this.usuarioRepository.create(usuario);
+  }
+
+  @post('/validar-hash-usuario')
+  @response(200, {
+    description: 'Validar hash',
+  })
+  async validarHashUsuario(
+    @requestBody({
+      content: {
+        'application/json': {
+          schema: getModelSchemaRef(HashValidacionUsuario, {}),
+        },
+      },
+    })
+    hash: HashValidacionUsuario,
+  ): Promise<boolean> {
+    let usuario = await this.usuarioRepository.findOne({
+      where: {
+        hashValidacion: hash.codigoHash,
+        estadoValidacion: false
+      }
+    });
+    if (usuario) {
+      usuario.estadoValidacion = true;
+      this.usuarioRepository.replaceById(usuario._id, usuario);
+      return true;
+    }
+    return false;
   }
 
   @get('/usuario/count')
