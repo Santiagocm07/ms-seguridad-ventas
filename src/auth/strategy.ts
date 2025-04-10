@@ -28,6 +28,7 @@ export class AuthStrategy implements AuthenticationStrategy {
    */
   async authenticate(request: Request): Promise<UserProfile | undefined> {
     let token = parseBearerToken(request);
+    console.log("Token recibido:", token);
     if (token) {
       let idRol = this.servicioSeguridad.obtenerRolDesdeToken(token);
       let idMenu: string = this.metadata[0].options![0];
@@ -36,6 +37,7 @@ export class AuthStrategy implements AuthenticationStrategy {
 
       try {
         let res = await this.servicioAuth.verificarPermisoDeUsuarioPorRol(idRol, idMenu, accion);
+        console.log("Datos obtenidos UserProfile", res);
         return res;
       } catch (e) {
         throw e;

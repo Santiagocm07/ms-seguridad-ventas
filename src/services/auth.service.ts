@@ -18,7 +18,6 @@ export class AuthService {
         menuId: idMenu
       }
     });
-    console.log(permiso);
     let continuar: boolean = false;
     if (permiso) {
       switch (accion) {
@@ -46,6 +45,7 @@ export class AuthService {
         });
         return perfil;
       } else {
+        console.log(`Permiso no otorgado para la acción: ${accion}`);
         return undefined;
       }
     } else {

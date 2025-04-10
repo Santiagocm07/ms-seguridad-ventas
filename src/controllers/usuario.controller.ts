@@ -1,5 +1,5 @@
-import {authenticate} from '@loopback/authentication';
-import {service} from '@loopback/core';
+import {authenticate, AuthenticationBindings} from '@loopback/authentication';
+import {inject, service} from '@loopback/core';
 import {
   Count,
   CountSchema,
@@ -23,7 +23,7 @@ import {
 import {UserProfile} from '@loopback/security';
 import {ConfiguracionNotificaciones} from '../config/notificaciones.config';
 import {ConfiguracionSeguridad} from '../config/seguridad.config';
-import {Credenciales, CredencialesRecuperarClave, FactorDeAutenticacionPorCodigo, HashValidacionUsuario, Login, PermisosRolMenu, Usuario} from '../models';
+import {Credenciales, CredencialesCambioClave, CredencialesRecuperarClave, FactorDeAutenticacionPorCodigo, HashValidacionUsuario, Login, PermisosRolMenu, Usuario} from '../models';
 import {LoginRepository, UsuarioRepository} from '../repositories';
 import {AuthService, NotificacionesService, SeguridadUsuarioService} from '../services';
 
@@ -38,7 +38,9 @@ export class UsuarioController {
     @service(AuthService)
     private servicioAuth: AuthService,
     @service(NotificacionesService)
-    public servicioNotificaciones: NotificacionesService
+    public servicioNotificaciones: NotificacionesService,
+    // @inject(AuthenticationBindings.CURRENT_USER)
+    // private currentUser: UserProfile
   ) { }
 
   @authenticate({
@@ -105,6 +107,7 @@ export class UsuarioController {
     usuario.hashValidacion = hash;
     usuario.estadoValidacion = false;
     usuario.aceptado = false;
+    usuario.rolId = ConfiguracionSeguridad.rolUsuarioPublico;
     // Notificación del hash
     let enlace = `<a href="${ConfiguracionNotificaciones.urlValidacionCorreoFrontend}/${hash}" target='_blank'>Validar</a>`;
     let datos = {
@@ -348,6 +351,61 @@ export class UsuarioController {
     return new HttpErrors[401]("Credenciales incorrectas.");
   }
 
+  @authenticate({
+    strategy: "auth",
+    options: [ConfiguracionSeguridad.menuUsuarioId, ConfiguracionSeguridad.editarAccion]
+  })
+  @patch('/cambiar-clave')
+  @response(200, {
+    description: 'Cambio de contraseña exitoso',
+    content: {'application/json': {schema: getModelSchemaRef(Usuario)}},
+  })
+  async cambiarClave(
+    @requestBody() Credenciales: CredencialesCambioClave,
+    @inject(AuthenticationBindings.CURRENT_USER) currentUser: UserProfile
+    // @inject('authentication.currentUser') currentUser: UserProfile,
+  ): Promise<Usuario> {
+    console.log("Datos de credenciales:", Credenciales);
+    console.log("Usuario autenticado:", currentUser);
+
+    if (!currentUser) {
+      throw new HttpErrors.Unauthorized("No se ha encontrado el usuario autenticado");
+    }
+
+    const idUsuario = Credenciales.idUsuario;
+    let usuario = await this.usuarioRepository.findById(idUsuario);
+
+    if (!usuario) {
+      throw new HttpErrors.NotFound("Usuario no encontrado");
+    }
+
+    const claveActualCifrada = this.servicioSeguridad.cifrarTexto(Credenciales.clave);
+    console.log("Clave actual cifrada:", claveActualCifrada);
+    console.log("Clave almacenada en base de datos:", usuario.clave);
+    if (usuario.clave !== claveActualCifrada) {
+      throw new HttpErrors.Unauthorized("La clave actual es incorrecta");
+    }
+
+    if (Credenciales.claveNueva !== Credenciales.validarClaveNueva) {
+      throw new HttpErrors.BadRequest("La clave nueva y la validación no coinciden");
+    }
+
+    if (Credenciales.claveNueva.length < 6) {
+      throw new HttpErrors.BadRequest("La clave nueva debe de tener al menos 6 caracteres");
+    }
+
+    // Cifrar la nueva clave
+    const nuevaClaveCifrada = this.servicioSeguridad.cifrarTexto(Credenciales.claveNueva);
+
+    // Actualizar la nueva clave al usuario
+    usuario.clave = nuevaClaveCifrada;
+
+    await this.usuarioRepository.updateById(usuario._id, usuario);
+
+    console.log("Clave actualizada correctamente:", usuario);
+    return usuario;
+  }
+
   @post('/validar-permisos')
   @response(200, {
     description: "Validación de permisos de usuario para lógica de negocio",
@@ -388,6 +446,7 @@ export class UsuarioController {
     let usuario = await this.servicioSeguridad.validarCodigo2fa(credenciales);
     if (usuario) {
       let token = this.servicioSeguridad.crearToken(usuario);
+      let menu = [];
       if (usuario) {
         usuario.clave = ""; // Para no exponer el dato cifrado de deja vacio
         try {
@@ -401,9 +460,11 @@ export class UsuarioController {
         } catch {
           console.log("No se ha almacenado el cambio del estado de token en la base de datos.");
         }
+        menu = await this.servicioSeguridad.consultarPermisosDeMenuPorUsuario(usuario.rolId);
         return {
           user: usuario,
-          token: token
+          token: token,
+          menu: menu
         };
       }
     }
